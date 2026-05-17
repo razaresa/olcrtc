@@ -94,6 +94,12 @@ func (p *streamTransport) CanSend() bool {
 	return p.stream.CanSend()
 }
 
+func (p *streamTransport) ResetPeerLatch() {
+	if resetter, ok := p.stream.(interface{ ResetPeerLatch() }); ok {
+		resetter.ResetPeerLatch()
+	}
+}
+
 // Features describes the current datachannel transport semantics.
 func (p *streamTransport) Features() transport.Features {
 	return transport.Features{

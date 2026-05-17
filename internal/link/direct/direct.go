@@ -81,6 +81,11 @@ func (d *directLink) WatchConnection(ctx context.Context) {
 	d.transport.WatchConnection(ctx)
 }
 func (d *directLink) CanSend() bool { return d.transport.CanSend() }
+func (d *directLink) ResetPeerLatch() {
+	if resetter, ok := d.transport.(transport.PeerLatchResetter); ok {
+		resetter.ResetPeerLatch()
+	}
+}
 
 // Features reports the direct link's underlying transport capabilities.
 func (d *directLink) Features() link.Features { return d.transport.Features() }

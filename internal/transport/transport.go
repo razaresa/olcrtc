@@ -33,6 +33,12 @@ type Transport interface {
 	Features() Features
 }
 
+// PeerLatchResetter is optionally implemented by transports that latch one
+// remote peer inside a shared provider room.
+type PeerLatchResetter interface {
+	ResetPeerLatch()
+}
+
 // TrafficConfig controls optional reliability-oriented send shaping.
 type TrafficConfig struct {
 	MaxPayloadSize int

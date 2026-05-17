@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
+	"github.com/pion/webrtc/v4"
 )
 
 const (
@@ -183,6 +185,106 @@ func TestDeliverBridgeMessageMagicAndPeerLatch(t *testing.T) {
 	}
 	if string(received[0]) != "alpha" || string(received[1]) != "beta" {
 		t.Fatalf("received = %q, want [alpha beta]", received)
+	}
+}
+
+func TestBridgeSendTargetTracksPeerLatchAndReset(t *testing.T) {
+	sess, err := New(context.Background(), engine.Config{
+		URL:   testHost,
+		Extra: map[string]string{credentialKeyRoom: testRoom},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	js, ok := sess.(*Session)
+	if !ok {
+		t.Fatal("sess is not *Session")
+	}
+	js.onData = func([]byte) {}
+
+	if got := js.bridgeSendTarget(); got != "" {
+		t.Fatalf("bridgeSendTarget before latch = %q, want broadcast", got)
+	}
+
+	js.deliverBridgeMessage(makeBridgeMessageFrom("peerA", map[string]any{
+		rawFieldKey: makeBridgeFrame(t, []byte("hello")),
+	}), true)
+	if got := js.bridgeSendTarget(); got != "peerA" {
+		t.Fatalf("bridgeSendTarget after latch = %q, want peerA", got)
+	}
+
+	js.ResetPeerLatch()
+	if got := js.bridgeSendTarget(); got != "" {
+		t.Fatalf("bridgeSendTarget after reset = %q, want broadcast", got)
+	}
+
+	js.deliverBridgeMessage(makeBridgeMessageFrom("peerB", map[string]any{
+		rawFieldKey: makeBridgeFrame(t, []byte("hello")),
+	}), true)
+	if got := js.bridgeSendTarget(); got != "peerB" {
+		t.Fatalf("bridgeSendTarget after relatch = %q, want peerB", got)
+	}
+}
+
+func TestPeerSwitchRequestsReconnect(t *testing.T) {
+	sess, err := New(context.Background(), engine.Config{
+		URL:   testHost,
+		Extra: map[string]string{credentialKeyRoom: testRoom},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	js, ok := sess.(*Session)
+	if !ok {
+		t.Fatal("sess is not *Session")
+	}
+	var received [][]byte
+	js.onData = func(b []byte) {
+		received = append(received, append([]byte(nil), b...))
+	}
+
+	reconnects := make(chan struct{}, 2)
+	js.SetShouldReconnect(func() bool { return true })
+	js.SetReconnectCallback(func(*webrtc.DataChannel) {
+		js.ResetPeerLatch()
+		reconnects <- struct{}{}
+	})
+
+	js.deliverBridgeMessage(makeBridgeMessageFrom("peerA", map[string]any{
+		rawFieldKey: makeBridgeFrame(t, []byte("hello")),
+	}), true)
+	js.deliverBridgeMessage(makeBridgeMessageFrom("peerB", map[string]any{
+		rawFieldKey: makeBridgeFrame(t, []byte("new-peer")),
+	}), true)
+
+	select {
+	case <-reconnects:
+	case <-time.After(time.Second):
+		t.Fatal("peer switch did not request reconnect")
+	}
+	if got := js.bridgeSendTarget(); got != "peerB" {
+		t.Fatalf("bridgeSendTarget after peer switch = %q, want peerB", got)
+	}
+	if len(received) != 2 || string(received[1]) != "new-peer" {
+		t.Fatalf("received after peer switch = %q, want second frame delivered", received)
+	}
+
+	js.deliverBridgeMessage(makeBridgeMessageFrom("peerB", map[string]any{
+		rawFieldKey: makeBridgeFrame(t, []byte("duplicate")),
+	}), true)
+	select {
+	case <-reconnects:
+		t.Fatal("duplicate peer switch requested reconnect twice")
+	default:
+	}
+
+	js.ResetPeerLatch()
+	if got := js.bridgeSendTarget(); got != "" {
+		t.Fatalf("bridgeSendTarget after reset = %q, want broadcast", got)
 	}
 }
 

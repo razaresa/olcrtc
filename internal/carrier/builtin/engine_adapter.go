@@ -140,6 +140,11 @@ func (b *engineByteStream) WatchConnection(ctx context.Context) {
 	b.session.WatchConnection(ctx)
 }
 func (b *engineByteStream) CanSend() bool { return b.session.CanSend() }
+func (b *engineByteStream) ResetPeerLatch() {
+	if resetter, ok := b.session.(engine.PeerLatchResetter); ok {
+		resetter.ResetPeerLatch()
+	}
+}
 
 type engineVideoTrack struct {
 	session engine.Session

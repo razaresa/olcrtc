@@ -399,6 +399,7 @@ func (c *Client) handleReconnect(ctx context.Context, cfg Config, cancel context
 	if oldControl != nil {
 		_ = oldControl.Close()
 	}
+	resetLinkPeerLatch(c.ln)
 
 	// Server-side may still be tearing down its own session when our callback
 	// fires — carriers don't guarantee reconnect callbacks are delivered to both
@@ -460,6 +461,12 @@ func (c *Client) tryReopenSession(
 	c.recordSession(sid)
 	c.startControlLoop(ctx, cfg, cancel, control)
 	return true
+}
+
+func resetLinkPeerLatch(ln link.Link) {
+	if resetter, ok := ln.(link.PeerLatchResetter); ok {
+		resetter.ResetPeerLatch()
+	}
 }
 
 func (c *Client) startControlLoop(

@@ -399,6 +399,7 @@ func (s *Server) reinstallSession(dead *smux.Session) {
 	if oldSID != "" {
 		s.onClose(oldSID, "reconnect")
 	}
+	resetLinkPeerLatch(s.ln)
 }
 
 func (s *Server) closeSession() {
@@ -425,6 +426,12 @@ func (s *Server) closeSession() {
 	}
 	if oldSID != "" {
 		s.onClose(oldSID, "closed")
+	}
+}
+
+func resetLinkPeerLatch(ln link.Link) {
+	if resetter, ok := ln.(link.PeerLatchResetter); ok {
+		resetter.ResetPeerLatch()
 	}
 }
 

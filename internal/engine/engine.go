@@ -84,6 +84,12 @@ type VideoTrackCapable interface {
 	SetVideoTrackHandler(cb func(*webrtc.TrackRemote, *webrtc.RTPReceiver))
 }
 
+// PeerLatchResetter is optionally implemented by engines whose byte stream
+// latches one remote endpoint inside a shared conference room.
+type PeerLatchResetter interface {
+	ResetPeerLatch()
+}
+
 // Factory creates a new engine session.
 type Factory func(ctx context.Context, cfg Config) (Session, error)
 

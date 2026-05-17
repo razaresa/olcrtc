@@ -33,6 +33,12 @@ type FeaturesProvider interface {
 	Features() Features
 }
 
+// PeerLatchResetter is optionally implemented by links whose underlying
+// transport can clear a latched peer in a shared provider room.
+type PeerLatchResetter interface {
+	ResetPeerLatch()
+}
+
 // Config holds common link configuration.
 type Config struct {
 	Transport string

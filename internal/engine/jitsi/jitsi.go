@@ -96,11 +96,14 @@ type Session struct {
 	// messages from other senders are dropped, isolating us from chatter by
 	// unrelated olcrtc processes that happen to share the same room.
 	peerEndpoint atomic.Pointer[string]
-	done        chan struct{}
-	doneOnce    sync.Once
-	cancel      context.CancelFunc
-	runCtx      context.Context //nolint:containedctx // engine owns the supervisor lifetime
-	wg          sync.WaitGroup
+	// peerSwitchPending suppresses repeated reconnect callbacks while the
+	// upper layer tears down the old smux session after a new endpoint appears.
+	peerSwitchPending atomic.Bool
+	done              chan struct{}
+	doneOnce          sync.Once
+	cancel            context.CancelFunc
+	runCtx            context.Context //nolint:containedctx // engine owns the supervisor lifetime
+	wg                sync.WaitGroup
 
 	videoTrackMu sync.RWMutex
 	videoTracks  []webrtc.TrackLocal
@@ -255,8 +258,7 @@ func (s *Session) Connect(ctx context.Context) error {
 		}
 		// Re-latch peer on every bridge open: after a reconnect the partner's
 		// MUC nick may have changed.
-		s.peerEndpoint.Store(nil)
-		s.peerVideoSSRC.Store(0)
+		s.ResetPeerLatch()
 		s.bridgeReady.Store(true)
 		logger.Infof("jitsi: bridge open (endpoints=%v)", jSess.Endpoints())
 	}
@@ -477,7 +479,6 @@ func (s *Session) trickleDrainLoop(pc *webrtc.PeerConnection, neg negotiator, st
 	}
 }
 
-
 // xmlCandidate is a minimal XML representation of a Jingle ICE candidate.
 type xmlCandidate struct {
 	Component  string `xml:"component,attr"`
@@ -495,8 +496,8 @@ type xmlCandidate struct {
 // xmlTransportInfo is the minimal structure needed to extract candidates
 // from a <jingle action="transport-info"> stanza.
 type xmlTransportInfo struct {
-	XMLName  xml.Name `xml:"iq"`
-	Jingle   struct {
+	XMLName xml.Name `xml:"iq"`
+	Jingle  struct {
 		Action   string `xml:"action,attr"`
 		Contents []struct {
 			Name      string `xml:"name,attr"`
@@ -604,7 +605,7 @@ func (s *Session) sendLoop() {
 			if jSess == nil {
 				return
 			}
-			if err := jSess.BridgeSendRaw("", data); err != nil {
+			if err := jSess.BridgeSendRaw(s.bridgeSendTarget(), data); err != nil {
 				if s.closed.Load() {
 					return
 				}
@@ -661,13 +662,30 @@ func (s *Session) deliverBridgeMessage(msg j.BridgeMessage, ok bool) bool {
 	return true
 }
 
+func (s *Session) bridgeSendTarget() string {
+	if cur := s.peerEndpoint.Load(); cur != nil {
+		return *cur
+	}
+	return ""
+}
+
+// ResetPeerLatch clears the currently latched peer endpoint.
+func (s *Session) ResetPeerLatch() {
+	s.peerEndpoint.Store(nil)
+	s.peerVideoSSRC.Store(0)
+	s.peerSwitchPending.Store(false)
+}
+
 // peerLatchAccepts implements the peer-latch logic: the first sender whose
 // payload survived the magic check becomes our partner; everyone else is
 // ignored. Cleared on reconnect by the supervisor (peerEndpoint is reset
 // whenever the bridge is reopened).
 func (s *Session) peerLatchAccepts(from string) bool {
 	if cur := s.peerEndpoint.Load(); cur != nil {
-		return *cur == from
+		if *cur == from {
+			return true
+		}
+		return s.signalPeerSwitch(*cur, from)
 	}
 	if from == "" {
 		return true
@@ -677,6 +695,26 @@ func (s *Session) peerLatchAccepts(from string) bool {
 	// peer first; if so, drop this frame.
 	cur := s.peerEndpoint.Load()
 	return cur == nil || *cur == from
+}
+
+func (s *Session) signalPeerSwitch(oldPeer, newPeer string) bool {
+	if newPeer == "" || s.closed.Load() {
+		return false
+	}
+	if s.shouldReconnect != nil && !s.shouldReconnect() {
+		return false
+	}
+	if !s.peerSwitchPending.CompareAndSwap(false, true) {
+		return false
+	}
+	logger.Infof("jitsi: peer endpoint changed from %s to %s; requesting reconnect", oldPeer, newPeer)
+	if cb := s.onReconnect; cb != nil {
+		cb(nil)
+		peer := newPeer
+		s.peerEndpoint.Store(&peer)
+		return true
+	}
+	return false
 }
 
 // decodeRaw extracts the bytes from an EndpointMessage produced by the j

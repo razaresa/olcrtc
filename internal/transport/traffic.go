@@ -98,6 +98,12 @@ func (t *trafficTransport) Features() Features {
 	return features
 }
 
+func (t *trafficTransport) ResetPeerLatch() {
+	if resetter, ok := t.inner.(PeerLatchResetter); ok {
+		resetter.ResetPeerLatch()
+	}
+}
+
 func (t *trafficTransport) nextDelay() time.Duration {
 	if t.maxDelay <= 0 && t.minDelay <= 0 {
 		return 0
