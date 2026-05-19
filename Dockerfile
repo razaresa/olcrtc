@@ -10,6 +10,7 @@ WORKDIR /src
 RUN apk add --no-cache ca-certificates git
 
 COPY go.mod go.sum ./
+COPY third_party/j/go.mod ./third_party/j/go.mod
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
@@ -36,7 +37,8 @@ COPY --from=build /out/olcrtc /usr/local/bin/olcrtc
 COPY script/docker/olcrtc-entrypoint.sh /usr/local/bin/olcrtc-entrypoint
 COPY script/docker/olcrtc-healthcheck.sh /usr/local/bin/olcrtc-healthcheck
 
-RUN chmod 0755 /usr/local/bin/olcrtc /usr/local/bin/olcrtc-entrypoint /usr/local/bin/olcrtc-healthcheck
+RUN sed -i 's/\r$//' /usr/local/bin/olcrtc-entrypoint /usr/local/bin/olcrtc-healthcheck && \
+    chmod 0755 /usr/local/bin/olcrtc /usr/local/bin/olcrtc-entrypoint /usr/local/bin/olcrtc-healthcheck
 
 USER olcrtc:olcrtc
 WORKDIR /var/lib/olcrtc

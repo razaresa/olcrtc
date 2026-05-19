@@ -2,6 +2,8 @@ module github.com/openlibrecommunity/olcrtc
 
 go 1.25.0
 
+replace github.com/zarazaex69/j => ./third_party/j
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674

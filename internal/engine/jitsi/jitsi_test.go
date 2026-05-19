@@ -124,6 +124,136 @@ func TestSendAfterClose(t *testing.T) {
 	}
 }
 
+func TestByteStreamNegotiatesPeerConnection(t *testing.T) {
+	sess, err := New(context.Background(), engine.Config{
+		URL:    testHost,
+		Extra:  map[string]string{credentialKeyRoom: testRoom},
+		OnData: func([]byte) {},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	js, ok := sess.(*Session)
+	if !ok {
+		t.Fatal("sess is not *Session")
+	}
+	if !js.shouldNegotiatePC() {
+		t.Fatal("datachannel byte-stream sessions must negotiate PeerConnection")
+	}
+}
+
+func TestBridgeSendErrorEndsSessionOnce(t *testing.T) {
+	sess, err := New(context.Background(), engine.Config{
+		URL:   testHost,
+		Extra: map[string]string{credentialKeyRoom: testRoom},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	js, ok := sess.(*Session)
+	if !ok {
+		t.Fatal("sess is not *Session")
+	}
+	reasons := make(chan string, 2)
+	js.SetEndedCallback(func(reason string) { reasons <- reason })
+
+	js.handleBridgeSendError(errors.New("write failed"))
+	js.handleBridgeSendError(errors.New("write failed again"))
+
+	select {
+	case got := <-reasons:
+		if got != "jitsi bridge send failed" {
+			t.Fatalf("ended reason = %q, want jitsi bridge send failed", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("bridge send error did not end session")
+	}
+	select {
+	case got := <-reasons:
+		t.Fatalf("second ended callback = %q, want none", got)
+	default:
+	}
+}
+
+func TestBridgeKeepaliveMessageIsIgnoredByDataPlane(t *testing.T) {
+	sess, err := New(context.Background(), engine.Config{
+		URL:   testHost,
+		Extra: map[string]string{credentialKeyRoom: testRoom},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	js, ok := sess.(*Session)
+	if !ok {
+		t.Fatal("sess is not *Session")
+	}
+	delivered := false
+	js.onData = func([]byte) { delivered = true }
+
+	msg := makeBridgeMessageFrom("peerA", bridgeKeepaliveFields())
+	if !js.deliverBridgeMessage(msg, true) {
+		t.Fatal("keepalive message stopped recv loop")
+	}
+	if delivered {
+		t.Fatal("keepalive message reached data plane")
+	}
+}
+
+func TestBridgeKeepaliveFieldsDoNotCarryRawPayload(t *testing.T) {
+	fields := bridgeKeepaliveFields()
+	if fields["type"] != bridgeKeepaliveType {
+		t.Fatalf("type = %v, want %s", fields["type"], bridgeKeepaliveType)
+	}
+	if _, ok := fields[rawFieldKey]; ok {
+		t.Fatal("keepalive must not include raw payload")
+	}
+}
+
+func TestProblemPeerConnectionStatesEndSession(t *testing.T) {
+	problemStates := []webrtc.PeerConnectionState{
+		webrtc.PeerConnectionStateDisconnected,
+		webrtc.PeerConnectionStateFailed,
+		webrtc.PeerConnectionStateClosed,
+	}
+	for _, state := range problemStates {
+		t.Run(state.String(), func(t *testing.T) {
+			sess, err := New(context.Background(), engine.Config{
+				URL:   testHost,
+				Extra: map[string]string{credentialKeyRoom: testRoom},
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			defer func() { _ = sess.Close() }()
+
+			js, ok := sess.(*Session)
+			if !ok {
+				t.Fatal("sess is not *Session")
+			}
+			reasons := make(chan string, 1)
+			js.SetEndedCallback(func(reason string) { reasons <- reason })
+
+			js.handlePeerConnectionState(state)
+
+			select {
+			case got := <-reasons:
+				want := "jitsi peer connection " + state.String()
+				if got != want {
+					t.Fatalf("ended reason = %q, want %q", got, want)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("%s did not end session", state)
+			}
+		})
+	}
+}
+
 func TestSanitiseNick(t *testing.T) {
 	tests := []struct {
 		raw  string

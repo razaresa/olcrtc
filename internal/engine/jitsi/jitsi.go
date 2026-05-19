@@ -42,6 +42,8 @@ const (
 	// transport in olcrtc already uses 12 KiB chunks, well under this limit.
 	bridgeMaxMessageSize = 16 * 1024
 	bridgeOpenTimeout    = 30 * time.Second
+	bridgeKeepaliveEvery = 10 * time.Second
+	bridgeKeepaliveType  = "olcrtc-keepalive"
 	defaultNick          = "olcrtc"
 	credentialKeyRoom    = "room"
 	videoTrackName       = "videochannel"
@@ -90,6 +92,7 @@ type Session struct {
 	sendQueue   chan []byte
 	bridgeReady atomic.Bool
 	closed      atomic.Bool
+	ended       atomic.Bool
 
 	// peerEndpoint latches the MUC nick of the first occupant whose
 	// EndpointMessage passed the bridgeMagic check. Once set, all bridge
@@ -229,8 +232,8 @@ func (s *Session) Capabilities() engine.Capabilities {
 }
 
 // Connect joins the Jitsi conference, optionally opens the bridge channel,
-// and (if video tracks are pending or a remote handler is set) negotiates a
-// pion PeerConnection.
+// and negotiates a pion PeerConnection whenever the session is expected to
+// stay in the conference.
 func (s *Session) Connect(ctx context.Context) error {
 	if s.closed.Load() {
 		return ErrSessionClosed
@@ -269,13 +272,17 @@ func (s *Session) Connect(ctx context.Context) error {
 		}
 	}
 
-	s.wg.Add(2)
+	s.wg.Add(3)
 	go s.sendLoop()
 	go s.recvLoop()
+	go s.bridgeKeepaliveLoop()
 	return nil
 }
 
 func (s *Session) shouldNegotiatePC() bool {
+	if s.onData != nil {
+		return true
+	}
 	s.videoTrackMu.RLock()
 	defer s.videoTrackMu.RUnlock()
 	return len(s.videoTracks) > 0 || s.onVideoTrack != nil
@@ -389,12 +396,7 @@ func (s *Session) negotiatePC(ctx context.Context, jSess *j.Session) error {
 			cb(track, recv)
 		}
 	})
-	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		logger.Debugf("jitsi pc state: %s", state.String())
-		if state == webrtc.PeerConnectionStateFailed && !s.closed.Load() && s.onEnded != nil {
-			s.onEnded("jitsi peer connection failed")
-		}
-	})
+	pc.OnConnectionStateChange(s.handlePeerConnectionState)
 
 	neg := jSess.Negotiator()
 	neg.PC = pc
@@ -606,13 +608,63 @@ func (s *Session) sendLoop() {
 				return
 			}
 			if err := jSess.BridgeSendRaw(s.bridgeSendTarget(), data); err != nil {
-				if s.closed.Load() {
-					return
-				}
-				logger.Debugf("jitsi bridge send: %v", err)
+				s.handleBridgeSendError(err)
+				return
 			}
 		}
 	}
+}
+
+func (s *Session) handleBridgeSendError(err error) {
+	if err == nil || s.closed.Load() {
+		return
+	}
+	logger.Debugf("jitsi bridge send: %v", err)
+	s.signalEnded("jitsi bridge send failed")
+}
+
+func (s *Session) handlePeerConnectionState(state webrtc.PeerConnectionState) {
+	logger.Debugf("jitsi pc state: %s", state.String())
+	switch state {
+	case webrtc.PeerConnectionStateDisconnected,
+		webrtc.PeerConnectionStateFailed,
+		webrtc.PeerConnectionStateClosed:
+		if !s.closed.Load() {
+			s.signalEnded("jitsi peer connection " + state.String())
+		}
+	case webrtc.PeerConnectionStateUnknown,
+		webrtc.PeerConnectionStateNew,
+		webrtc.PeerConnectionStateConnecting,
+		webrtc.PeerConnectionStateConnected:
+	}
+}
+
+func (s *Session) bridgeKeepaliveLoop() {
+	defer s.wg.Done()
+	if s.onData == nil {
+		return
+	}
+	ticker := time.NewTicker(bridgeKeepaliveEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			jSess := s.jSess.Load()
+			if jSess == nil || !s.bridgeReady.Load() {
+				continue
+			}
+			if err := jSess.BridgeSendMessage(s.bridgeSendTarget(), bridgeKeepaliveFields()); err != nil {
+				s.handleBridgeSendError(err)
+				return
+			}
+		}
+	}
+}
+
+func bridgeKeepaliveFields() map[string]any {
+	return map[string]any{"type": bridgeKeepaliveType}
 }
 
 func (s *Session) recvLoop() {
@@ -899,6 +951,9 @@ func (s *Session) SetVideoTrackHandler(cb func(*webrtc.TrackRemote, *webrtc.RTPR
 }
 
 func (s *Session) signalEnded(reason string) {
+	if !s.ended.CompareAndSwap(false, true) {
+		return
+	}
 	s.bridgeReady.Store(false)
 	if s.onEnded != nil {
 		s.onEnded(reason)
