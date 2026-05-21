@@ -14,6 +14,7 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/control"
 	cryptopkg "github.com/openlibrecommunity/olcrtc/internal/crypto"
 	"github.com/openlibrecommunity/olcrtc/internal/muxconn"
+	"github.com/openlibrecommunity/olcrtc/internal/runtime"
 	"github.com/xtaci/smux"
 )
 
@@ -51,9 +52,10 @@ func TestSmuxConfig(t *testing.T) {
 		t.Fatalf("smuxConfig() = %+v", cfg)
 	}
 	capped := smuxConfig(4096)
-	if capped.MaxFrameSize != 4096-cryptopkg.WireOverhead {
+	want := 4096 - runtime.SmuxWireOverhead
+	if capped.MaxFrameSize != want {
 		t.Fatalf("smuxConfig(4096).MaxFrameSize = %d, want %d",
-			capped.MaxFrameSize, 4096-cryptopkg.WireOverhead)
+			capped.MaxFrameSize, want)
 	}
 }
 

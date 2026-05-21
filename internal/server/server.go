@@ -21,6 +21,7 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
 	"github.com/openlibrecommunity/olcrtc/internal/muxconn"
 	"github.com/openlibrecommunity/olcrtc/internal/names"
+	"github.com/openlibrecommunity/olcrtc/internal/runtime"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
 	"github.com/xtaci/smux"
 )
@@ -242,8 +243,8 @@ func smuxConfig(maxWirePayload ...int) *smux.Config {
 	cfg.Version = 2
 	cfg.KeepAliveDisabled = true
 	cfg.MaxFrameSize = 32768
-	if len(maxWirePayload) > 0 && maxWirePayload[0] > crypto.WireOverhead {
-		maxFrameSize := maxWirePayload[0] - crypto.WireOverhead
+	if len(maxWirePayload) > 0 && maxWirePayload[0] >= runtime.MinSmuxWirePayload {
+		maxFrameSize := maxWirePayload[0] - runtime.SmuxWireOverhead
 		if maxFrameSize < cfg.MaxFrameSize {
 			cfg.MaxFrameSize = maxFrameSize
 		}

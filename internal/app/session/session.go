@@ -15,11 +15,11 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/carrier/builtin"
 	"github.com/openlibrecommunity/olcrtc/internal/client"
 	"github.com/openlibrecommunity/olcrtc/internal/control"
-	"github.com/openlibrecommunity/olcrtc/internal/crypto"
 	"github.com/openlibrecommunity/olcrtc/internal/link"
 	"github.com/openlibrecommunity/olcrtc/internal/link/direct"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
 	"github.com/openlibrecommunity/olcrtc/internal/names"
+	"github.com/openlibrecommunity/olcrtc/internal/runtime"
 	"github.com/openlibrecommunity/olcrtc/internal/server"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
 	"github.com/openlibrecommunity/olcrtc/internal/transport/datachannel"
@@ -140,7 +140,7 @@ var (
 		"invalid max session duration (set lifecycle.max_session_duration to a duration > 0)")
 	// ErrTrafficMaxPayloadSizeInvalid indicates that traffic.max_payload_size is not valid.
 	ErrTrafficMaxPayloadSizeInvalid = errors.New(
-		"invalid traffic max payload size (set traffic.max_payload_size to 0 or a value above crypto overhead)")
+		"invalid traffic max payload size (set traffic.max_payload_size to 0 or a value above smux wire overhead)")
 	// ErrTrafficMinDelayInvalid indicates that traffic.min_delay is not a non-negative duration.
 	ErrTrafficMinDelayInvalid = errors.New(
 		"invalid traffic min delay (set traffic.min_delay to a duration >= 0)")
@@ -560,7 +560,7 @@ func validateTrafficConfig(cfg Config) error {
 
 func trafficConfig(cfg Config) (transport.TrafficConfig, error) {
 	if cfg.TrafficMaxPayloadSize < 0 || (cfg.TrafficMaxPayloadSize > 0 &&
-		cfg.TrafficMaxPayloadSize <= crypto.WireOverhead) {
+		cfg.TrafficMaxPayloadSize < runtime.MinSmuxWirePayload) {
 		return transport.TrafficConfig{}, ErrTrafficMaxPayloadSizeInvalid
 	}
 	minDelay, err := parseOptionalNonNegativeDuration(cfg.TrafficMinDelay)
